@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from typing import Optional, List, Tuple
 from concurrent.futures import ThreadPoolExecutor
 import traceback
+from urllib.parse import unquote
 
 # SGP 核心模块导入
 from src.watermark_service import (
@@ -83,7 +84,6 @@ def add_card(guild_id: int, channel_id: int, parent_id: Optional[int],
     """添加卡片记录"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    
     cursor.execute("""
         INSERT INTO cards (
             guild_id, channel_id, parent_id, uploader_id, 
@@ -737,11 +737,13 @@ class SGPCog(commands.Cog):
     @app_commands.command(name="上传角色卡", description="上传角色卡并生成追溯母带")
     @app_commands.describe(
         attachment="PNG 格式的角色卡图片",
+        name="角色卡名称 (可选，若不填则尝试自动获取)",
         allow_repost="是否允许他人转载",
         allow_modify="是否允许他人二次创作"
     )
     @app_commands.rename(
         attachment="附件",
+        name="名称",
         allow_repost="是否允许转载",
         allow_modify="是否允许二改"
     )
@@ -759,11 +761,53 @@ class SGPCog(commands.Cog):
         self,
         interaction: discord.Interaction,
         attachment: discord.Attachment,
+        name: str = None,
         allow_repost: int = 0,
         allow_modify: int = 0
     ):
         await interaction.response.defer(ephemeral=True)
+
+        # ==================== 文件名获取逻辑（支持手动指定+自动恢复）====================
+        # 优先级1: 用户手动输入的名称参数
+        if name:
+            # 获取真实文件的后缀名
+            ext = os.path.splitext(attachment.filename)[1]
+            # 如果用户输入的名称没带后缀，自动补上
+            if not name.endswith(ext):
+                original_filename = f"{name}{ext}"
+            else:
+                original_filename = name
+            print(f"DEBUG: 使用手动指定文件名: {original_filename}")
         
+        # 优先级2: 尝试从 URL 自动获取（修复Discord客户端中文丢失问题）
+        else:
+            # Step A: Extract raw filename from attachment.url
+            # URL format: https://.../filename.png?ex=...
+            raw_url_name = attachment.url.split('?')[0].split('/')[-1]
+            
+            # Step B: Decode URL-encoded filename
+            decoded_name = unquote(raw_url_name)
+            
+            # Step C: Smart Selection Logic
+            # If decoded_name contains non-ASCII characters or differs from attachment.filename,
+            # treat decoded_name as the True Original Filename
+            original_filename = decoded_name
+            
+            # Check if decoded_name has non-ASCII characters or is different/longer
+            has_non_ascii = any(ord(char) > 127 for char in decoded_name)
+            is_different = decoded_name != attachment.filename
+            
+            if not has_non_ascii and not is_different:
+                # Fallback to attachment.filename if no difference detected
+                original_filename = attachment.filename
+            
+            # Debug logging
+            print(f"DEBUG: Discord attachment.filename: {attachment.filename}")
+            print(f"DEBUG: URL raw name: {raw_url_name}")
+            print(f"DEBUG: URL decoded name: {decoded_name}")
+            print(f"DEBUG: Restored Filename: {original_filename}")
+        # ==================== 文件名获取逻辑结束 ====================
+
         try:
             # 验证服务器环境
             if not interaction.guild:
@@ -805,7 +849,7 @@ class SGPCog(commands.Cog):
             storage_path.mkdir(parents=True, exist_ok=True)
             
             # 生成安全的存储文件名（UUID + 扩展名），避免非ASCII字符问题
-            file_extension = os.path.splitext(attachment.filename)[1]  # 获取扩展名（如 .png）
+            file_extension = os.path.splitext(original_filename)[1]  # 从恢复的原始文件名获取扩展名
             stored_filename = f"{uuid.uuid4().hex}{file_extension}"  # 纯UUID文件名
             full_path = storage_path / stored_filename
             
@@ -837,12 +881,13 @@ class SGPCog(commands.Cog):
             relative_path = f"{guild_id}/{channel_id}/{stored_filename}"
             
             # 写入数据库 - 存储相对路径，而非绝对路径（将int转为bool）
+            # 使用 original_filename（恢复的原始文件名）而不是 attachment.filename
             card_id = add_card(
                 guild_id=guild_id,
                 channel_id=channel_id,
                 parent_id=parent_id,
                 uploader_id=interaction.user.id,
-                filename=attachment.filename,
+                filename=original_filename,  # ← 使用恢复的原始文件名
                 stored_filename=stored_filename,
                 file_path=relative_path,  # ← 存储相对路径
                 allow_repost=bool(allow_repost),
@@ -852,11 +897,11 @@ class SGPCog(commands.Cog):
             # 清理临时文件
             temp_file.unlink(missing_ok=True)
             
-            # 返回成功消息
+            # 返回成功消息 - 显示恢复的原始文件名
             embed = discord.Embed(
                 title="✅ 上传成功",
                 description=(
-                    f"**文件名:** {attachment.filename}\n"
+                    f"**文件名:** {original_filename}\n"
                     f"**卡片 ID:** {card_id}\n"
                     f"**权限配置:**\n"
                     f"• 允许转载: {'✅ 是' if allow_repost else '❌ 否'}\n"
@@ -871,7 +916,7 @@ class SGPCog(commands.Cog):
             
             await interaction.followup.send(embed=embed, ephemeral=True)
             
-            print(f"[上传] ✅ 用户 {interaction.user.id} 上传: {attachment.filename} (ID: {card_id})")
+            print(f"[上传] ✅ 用户 {interaction.user.id} 上传: {original_filename} (ID: {card_id})")
             
         except PermissionError as e:
             await interaction.followup.send(
