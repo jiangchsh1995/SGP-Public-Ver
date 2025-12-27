@@ -1,0 +1,63 @@
+﻿# ============================================================================
+# ShadowGuard Protocol (SGP) 配置文件
+# ============================================================================
+# 使用场景说明：
+#   - CLI 模式：通过 main.py 命令行工具使用（sign/verify/audit）
+#   - Bot 模式：通过 bot.py Discord Bot 使用
+# ============================================================================
+
+[Discord]
+# ┌─ 仅用于 Bot 模式 ─┐
+# Discord Bot Token（从 Discord Developer Portal 获取）
+bot_token = YOUR_DISCORD_BOT_TOKEN_HERE
+
+[Security]
+# ┌─ CLI 和 Bot 模式共用 ─┐
+# ⚠️ 重要：请生成您自己的唯一密钥，不要使用默认值！
+# 建议使用 32+ 字符的强随机密钥
+watermark_key = CHANGE_THIS_TO_YOUR_OWN_SECRET_KEY_32CHARS_OR_MORE
+
+[Identity]
+# ┌─ 仅用于 CLI 模式 ─┐
+# CLI 模式默认 UID（main.py sign 命令使用）
+# ⚠️ Bot 模式不使用此配置，会自动使用 interaction.user.id
+# 支持最大 25 位十进制数字
+owner_uuid = 0
+
+[Permissions]
+# ┌─ 仅用于 CLI 模式默认值 ─┐
+# CLI 模式：使用这些默认权限值
+# ⚠️ Bot 模式不使用此配置，权限存储在数据库中（每个卡片独立配置）
+allow_reprint = false       # 是否允许转载
+allow_derivative = false    # 是否允许二次创作
+
+[Algorithm]
+# ┌─ CLI 和 Bot 模式共用 ─┐
+# 算法参数（通常不需要修改）
+qim_step = 40.0            # QIM 量化步长 (30-50 推荐)
+
+[Paths]
+# ┌─ CLI 和 Bot 模式共用 ─┐
+# 目录配置
+master_dir = storage/masters          # 母带存储目录
+dist_dir = storage/distribution       # 分发临时目录（Bot 模式用后即删，CLI 模式持久化）
+input_dir = input_images              # 输入图片目录（CLI 模式使用）
+
+[System]
+# ┌─ CLI 和 Bot 模式共用 ─┐
+# 系统配置
+workers = 4                # 并发进程数（建议设置为 CPU 核心数）
+auto_cleanup = true        # 自动清理临时文件
+
+[Database]
+# ┌─ 仅用于 Bot 模式 ─┐
+# 数据库配置
+db_path = data.db          # SQLite 数据库文件路径
+temp_dir = temp_uploads    # 临时文件目录
+
+[UI]
+# ┌─ 仅用于 Bot 模式 ─┐
+# Discord UI 配置
+embed_color = 0x00A8FC     # Embed 消息颜色（十六进制）
+view_timeout = 180         # 交互视图超时时间（秒）
+max_file_size = 25         # 最大文件大小限制（MB）
