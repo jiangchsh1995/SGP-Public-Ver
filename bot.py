@@ -857,7 +857,8 @@ class SGPBot(commands.Bot):
     async def setup_hook(self):
         """Bot 启动时的钩子函数"""
         await self.add_cog(SGPCog(self))
-        print("[Bot] ✅ 命令已注册")
+        await self.tree.sync()
+        print("[Bot] ✅ 命令已请求全球同步（请等待生效）")
     
     async def on_ready(self):
         """Bot 就绪事件处理"""
