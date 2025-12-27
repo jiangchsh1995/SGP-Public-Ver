@@ -188,6 +188,97 @@ def update_card_permissions(card_id: int, user_id: int,
 
 # ==================== Discord UI 组件 ====================
 
+class PaginatedCardView(discord.ui.View):
+    """分页卡片视图"""
+    
+    def __init__(self, cards: List[Tuple], action: str, master_dir: Path, page: int = 0):
+        super().__init__(timeout=VIEW_TIMEOUT)
+        self.cards = cards
+        self.action = action
+        self.master_dir = master_dir
+        self.page = page
+        self.items_per_page = 10
+        self.total_pages = (len(cards) + self.items_per_page - 1) // self.items_per_page
+        
+        # 获取当前页的卡片
+        start_idx = page * self.items_per_page
+        end_idx = min(start_idx + self.items_per_page, len(cards))
+        current_cards = cards[start_idx:end_idx]
+        
+        # 添加选择菜单
+        select_menu = CardSelectMenu(current_cards, action, master_dir)
+        self.add_item(select_menu)
+        
+        # 添加翻页按钮
+        if self.total_pages > 1:
+            # 上一页按钮
+            prev_button = discord.ui.Button(
+                label="◀️ 上一页",
+                style=discord.ButtonStyle.secondary,
+                disabled=(page == 0),
+                custom_id="prev_page"
+            )
+            prev_button.callback = self.prev_page_callback
+            self.add_item(prev_button)
+            
+            # 页码显示
+            page_button = discord.ui.Button(
+                label=f"第 {page + 1}/{self.total_pages} 页",
+                style=discord.ButtonStyle.secondary,
+                disabled=True,
+                custom_id="page_info"
+            )
+            self.add_item(page_button)
+            
+            # 下一页按钮
+            next_button = discord.ui.Button(
+                label="下一页 ▶️",
+                style=discord.ButtonStyle.secondary,
+                disabled=(page >= self.total_pages - 1),
+                custom_id="next_page"
+            )
+            next_button.callback = self.next_page_callback
+            self.add_item(next_button)
+    
+    async def prev_page_callback(self, interaction: discord.Interaction):
+        """上一页回调"""
+        if self.page > 0:
+            new_view = PaginatedCardView(self.cards, self.action, self.master_dir, self.page - 1)
+            
+            # 更新描述
+            if self.action == "download":
+                title = "📥 选择角色卡"
+            else:
+                title = "⚙️ 管理角色卡"
+            
+            embed = discord.Embed(
+                title=title,
+                description=f"共有 **{len(self.cards)}** 张角色卡。\n请从下拉菜单中选择：",
+                color=EMBED_COLOR
+            )
+            
+            await interaction.response.edit_message(embed=embed, view=new_view)
+    
+    async def next_page_callback(self, interaction: discord.Interaction):
+        """下一页回调"""
+        if self.page < self.total_pages - 1:
+            new_view = PaginatedCardView(self.cards, self.action, self.master_dir, self.page + 1)
+            
+            # 更新描述
+            if self.action == "download":
+                title = "📥 选择角色卡"
+            else:
+                title = "⚙️ 管理角色卡"
+            
+            embed = discord.Embed(
+                title=title,
+                description=f"共有 **{len(self.cards)}** 张角色卡。\n请从下拉菜单中选择：",
+                color=EMBED_COLOR
+            )
+            
+            await interaction.response.edit_message(embed=embed, view=new_view)
+
+
 class CardSelectMenu(discord.ui.Select):
     """卡片选择下拉菜单"""
     
@@ -196,13 +287,22 @@ class CardSelectMenu(discord.ui.Select):
         self.action = action
         self.master_dir = master_dir  # 母带存储根目录，用于还原绝对路径
         
+        # 格式化时间显示
+        def format_time(timestamp: str) -> str:
+            """格式化时间戳为易读格式"""
+            try:
+                dt = datetime.fromisoformat(timestamp)
+                return dt.strftime("%Y-%m-%d %H:%M")
+            except:
+                return "未知时间"
+        
         options = [
             discord.SelectOption(
                 label=card[1][:100],  # filename
-                description=f"上传于 {card[7][:16] if len(card) > 7 else '未知时间'}",
+                description=f"上传于 {format_time(card[7]) if len(card) > 7 and card[7] else '未知时间'}",
                 value=str(card[0])  # card_id
             )
-            for card in cards[:25]  # Discord 限制最多 25 个选项
+            for card in cards
         ]
         
         super().__init__(
@@ -731,10 +831,8 @@ class SGPCog(commands.Cog):
                 await interaction.followup.send(embed=embed, ephemeral=True)
                 return
             
-            # 创建选择菜单（传递master_dir用于路径还原）
-            view = discord.ui.View(timeout=VIEW_TIMEOUT)
-            select_menu = CardSelectMenu(cards, action="download", master_dir=self.master_dir)
-            view.add_item(select_menu)
+            # 创建分页视图（每页最多10个）
+            view = PaginatedCardView(cards, action="download", master_dir=self.master_dir, page=0)
             
             embed = discord.Embed(
                 title="📥 选择角色卡",
@@ -780,10 +878,8 @@ class SGPCog(commands.Cog):
                 await interaction.followup.send(embed=embed, ephemeral=True)
                 return
             
-            # 创建选择菜单（传递master_dir用于路径还原）
-            view = discord.ui.View(timeout=VIEW_TIMEOUT)
-            select_menu = CardSelectMenu(cards, action="manage", master_dir=self.master_dir)
-            view.add_item(select_menu)
+            # 创建分页视图（每页最多10个）
+            view = PaginatedCardView(cards, action="manage", master_dir=self.master_dir, page=0)
             
             embed = discord.Embed(
                 title="⚙️ 管理角色卡",
