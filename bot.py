@@ -6,7 +6,7 @@ import sqlite3
 import os
 import uuid
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, List, Tuple
 from concurrent.futures import ThreadPoolExecutor
 import traceback
@@ -189,7 +189,7 @@ def update_card_permissions(card_id: int, user_id: int,
 # ==================== Discord UI 组件 ====================
 
 class PaginatedCardView(discord.ui.View):
-    """分页卡片视图"""
+    """分页卡片视图（使用下拉菜单+翻页按钮）"""
     
     def __init__(self, cards: List[Tuple], action: str, master_dir: Path, page: int = 0):
         super().__init__(timeout=VIEW_TIMEOUT)
@@ -200,16 +200,62 @@ class PaginatedCardView(discord.ui.View):
         self.items_per_page = 10
         self.total_pages = (len(cards) + self.items_per_page - 1) // self.items_per_page
         
+        # 格式化时间显示（UTC+8）
+        def format_time(timestamp: str) -> str:
+            if not timestamp:
+                return "未知时间"
+            try:
+                # 处理SQLite的TIMESTAMP格式
+                dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00').replace(' ', 'T'))
+                # 转换为北京时间（UTC+8）
+                dt_beijing = dt + timedelta(hours=8)
+                return dt_beijing.strftime("%Y-%m-%d %H:%M")
+            except Exception as e:
+                print(f"[警告] 时间格式化失败: {timestamp}, 错误: {e}")
+                return "未知时间"
+        
         # 获取当前页的卡片
         start_idx = page * self.items_per_page
         end_idx = min(start_idx + self.items_per_page, len(cards))
         current_cards = cards[start_idx:end_idx]
         
-        # 添加选择菜单
-        select_menu = CardSelectMenu(current_cards, action, master_dir)
-        self.add_item(select_menu)
+        # 创建下拉菜单选项
+        options = []
+        for idx, card in enumerate(current_cards):
+            card_id = card[0]
+            filename = card[1]
+            
+            # 根据action确定created_at的位置
+            # download: (id, filename, stored_filename, file_path, uploader_id, allow_repost, allow_modify, created_at)
+            # manage:   (id, filename, stored_filename, file_path, allow_repost, allow_modify, created_at)
+            if self.action == "download":
+                created_at = card[7] if len(card) > 7 else None
+            else:  # manage
+                created_at = card[6] if len(card) > 6 else None
+            
+            # Discord下拉菜单标签限制100字符，描述限制100字符
+            display_name = filename[:70] + "..." if len(filename) > 70 else filename
+            time_str = format_time(created_at)
+            
+            options.append(
+                discord.SelectOption(
+                    label=f"{start_idx + idx + 1}. {display_name}",
+                    description=f"上传: {time_str}",
+                    value=str(card_id)
+                )
+            )
         
-        # 添加翻页按钮
+        # 添加下拉菜单
+        if options:
+            select = discord.ui.Select(
+                placeholder="请选择角色卡...",
+                options=options,
+                custom_id="card_select"
+            )
+            select.callback = self.select_callback
+            self.add_item(select)
+        
+        # 添加翻页按钮（如果有多页）
         if self.total_pages > 1:
             # 上一页按钮
             prev_button = discord.ui.Button(
@@ -240,86 +286,25 @@ class PaginatedCardView(discord.ui.View):
             next_button.callback = self.next_page_callback
             self.add_item(next_button)
     
-    async def prev_page_callback(self, interaction: discord.Interaction):
-        """上一页回调"""
-        if self.page > 0:
-            new_view = PaginatedCardView(self.cards, self.action, self.master_dir, self.page - 1)
-            
-            # 更新描述
-            if self.action == "download":
-                title = "📥 选择角色卡"
-            else:
-                title = "⚙️ 管理角色卡"
-            
-            embed = discord.Embed(
-                title=title,
-                description=f"共有 **{len(self.cards)}** 张角色卡。\n请从下拉菜单中选择：",
-                color=EMBED_COLOR
-            )
-            
-            await interaction.response.edit_message(embed=embed, view=new_view)
-    
-    async def next_page_callback(self, interaction: discord.Interaction):
-        """下一页回调"""
-        if self.page < self.total_pages - 1:
-            new_view = PaginatedCardView(self.cards, self.action, self.master_dir, self.page + 1)
-            
-            # 更新描述
-            if self.action == "download":
-                title = "📥 选择角色卡"
-            else:
-                title = "⚙️ 管理角色卡"
-            
-            embed = discord.Embed(
-                title=title,
-                description=f"共有 **{len(self.cards)}** 张角色卡。\n请从下拉菜单中选择：",
-                color=EMBED_COLOR
-            )
-            
-            await interaction.response.edit_message(embed=embed, view=new_view)
-
-
-class CardSelectMenu(discord.ui.Select):
-    """卡片选择下拉菜单"""
-    
-    def __init__(self, cards: List[Tuple], action: str, master_dir: Path):
-        self.cards_data = cards
-        self.action = action
-        self.master_dir = master_dir  # 母带存储根目录，用于还原绝对路径
+    async def select_callback(self, interaction: discord.Interaction):
+        """下拉菜单选择回调"""
+        card_id = int(interaction.data['values'][0])
         
-        # 格式化时间显示
-        def format_time(timestamp: str) -> str:
-            """格式化时间戳为易读格式"""
-            try:
-                dt = datetime.fromisoformat(timestamp)
-                return dt.strftime("%Y-%m-%d %H:%M")
-            except:
-                return "未知时间"
-        
-        options = [
-            discord.SelectOption(
-                label=card[1][:100],  # filename
-                description=f"上传于 {format_time(card[7]) if len(card) > 7 and card[7] else '未知时间'}",
-                value=str(card[0])  # card_id
-            )
-            for card in cards
-        ]
-        
-        super().__init__(
-            placeholder="请选择一张角色卡...",
-            options=options,
-            custom_id=f"{action}_select"
-        )
-    
-    async def callback(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-        
-        card_id = int(self.values[0])
-        card_data = next((c for c in self.cards_data if c[0] == card_id), None)
+        # 从卡片列表中找到对应的卡片数据
+        card_data = None
+        for card in self.cards:
+            if card[0] == card_id:
+                card_data = card
+                break
         
         if not card_data:
-            await interaction.followup.send("❌ 卡片不存在", ephemeral=True)
+            await interaction.response.send_message(
+                "❌ 未找到该卡片",
+                ephemeral=True
+            )
             return
+        
+        await interaction.response.defer(ephemeral=True)
         
         if self.action == "download":
             await self.handle_download(interaction, card_data)
@@ -331,13 +316,25 @@ class CardSelectMenu(discord.ui.Select):
         try:
             card_id, filename, stored_filename, file_path, uploader_id, allow_repost, allow_modify = card_data[:7]
             
-            # 从数据库读取的是相对路径，需要还原为绝对路径
-            real_file_path = self.master_dir / file_path
+            # 路径处理 - 兼容旧数据（包含storage/masters前缀）和新数据（纯相对路径）
+            file_path_str = str(file_path).replace('\\', '/')  # 统一路径分隔符
+            file_path_obj = Path(file_path)
+            
+            # 检查是否已包含 storage/masters 路径（旧数据）
+            if 'storage' in file_path_str.lower() and 'masters' in file_path_str.lower():
+                # 旧数据：路径已包含完整前缀，直接使用
+                real_file_path = Path(file_path_str)
+            elif file_path_obj.is_absolute():
+                # 绝对路径
+                real_file_path = file_path_obj
+            else:
+                # 新数据：纯相对路径（guild_id/channel_id/filename），需要拼接
+                real_file_path = self.master_dir / file_path
             
             # 检查文件是否存在
             if not real_file_path.exists():
                 await interaction.followup.send(
-                    "❌ 文件已丢失：母带文件不存在",
+                    f"❌ 文件已丢失：母带文件不存在\n调试信息：`{real_file_path}`",
                     ephemeral=True
                 )
                 return
@@ -346,7 +343,6 @@ class CardSelectMenu(discord.ui.Select):
             loop = asyncio.get_event_loop()
             config = await loop.run_in_executor(None, load_config)
             
-            # 使用还原后的绝对路径作为母带文件名
             dist_path = await loop.run_in_executor(
                 None,
                 generate_distribution,
@@ -364,7 +360,7 @@ class CardSelectMenu(discord.ui.Select):
                     f"**文件名:** {filename}\n"
                     f"**上传者:** <@{uploader_id}>\n\n"
                     f"⚠️ **重要提示:**\n"
-                    f"• 此文件已嵌入您的专属追溯标识 (UID: `{interaction.user.id}`)\n"
+                    f"• 此文件已嵌入您的专属追溯标识\n"
                     f"• 仅供个人使用，请勿随意传播\n"
                     f"• 若发现泄露，系统可追溯到您的账号"
                 ),
@@ -392,15 +388,25 @@ class CardSelectMenu(discord.ui.Select):
     async def handle_manage(self, interaction: discord.Interaction, card_data: Tuple):
         """处理管理请求"""
         try:
-            card_id, filename, stored_filename, file_path, allow_repost, allow_modify = card_data[:6]
+            # get_user_cards_in_channel返回7个字段（没有uploader_id）
+            card_id, filename, stored_filename, file_path, allow_repost, allow_modify, created_at = card_data[:7]
             
-            # 传递master_dir用于删除操作
-            view = CardManageView(card_id, filename, file_path, allow_repost, allow_modify, self.master_dir)
+            # 格式化时间显示（UTC+8）
+            def format_time(timestamp: str) -> str:
+                try:
+                    dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                    dt_beijing = dt + timedelta(hours=8)
+                    return dt_beijing.strftime("%Y-%m-%d %H:%M")
+                except:
+                    return "未知时间"
+            
+            view = CardManageView(card_id, filename, file_path, allow_repost, allow_modify, self.master_dir, created_at)
             
             embed = discord.Embed(
                 title="⚙️ 管理角色卡",
                 description=(
                     f"**文件名:** {filename}\n"
+                    f"**上传时间:** {format_time(created_at) if created_at else '未知时间'}\n"
                     f"**当前权限:**\n"
                     f"• 允许转载: {'✅ 是' if allow_repost else '❌ 否'}\n"
                     f"• 允许二改: {'✅ 是' if allow_modify else '❌ 否'}\n\n"
@@ -417,13 +423,53 @@ class CardSelectMenu(discord.ui.Select):
                 "❌ 操作失败：无法加载管理界面",
                 ephemeral=True
             )
+    
+    async def prev_page_callback(self, interaction: discord.Interaction):
+        """上一页回调"""
+        if self.page > 0:
+            new_view = PaginatedCardView(self.cards, self.action, self.master_dir, self.page - 1)
+            
+            if self.action == "download":
+                title = "📥 选择角色卡"
+                desc = f"当前帖子共有 **{len(self.cards)}** 张角色卡可供下载。\n请点击按钮选择："
+            else:
+                title = "⚙️ 管理角色卡"
+                desc = f"您在当前帖子共有 **{len(self.cards)}** 张角色卡。\n请点击按钮选择要管理的卡片："
+            
+            embed = discord.Embed(
+                title=title,
+                description=desc,
+                color=EMBED_COLOR
+            )
+            
+            await interaction.response.edit_message(embed=embed, view=new_view)
+    
+    async def next_page_callback(self, interaction: discord.Interaction):
+        """下一页回调"""
+        if self.page < self.total_pages - 1:
+            new_view = PaginatedCardView(self.cards, self.action, self.master_dir, self.page + 1)
+            
+            if self.action == "download":
+                title = "📥 选择角色卡"
+                desc = f"当前帖子共有 **{len(self.cards)}** 张角色卡可供下载。\n请点击按钮选择："
+            else:
+                title = "⚙️ 管理角色卡"
+                desc = f"您在当前帖子共有 **{len(self.cards)}** 张角色卡。\n请点击按钮选择要管理的卡片："
+            
+            embed = discord.Embed(
+                title=title,
+                description=desc,
+                color=EMBED_COLOR
+            )
+            
+            await interaction.response.edit_message(embed=embed, view=new_view)
 
 
 class CardManageView(discord.ui.View):
     """卡片管理视图"""
     
     def __init__(self, card_id: int, filename: str, file_path: str, 
-                 allow_repost: bool, allow_modify: bool, master_dir: Path):
+                 allow_repost: bool, allow_modify: bool, master_dir: Path, created_at: str = None):
         super().__init__(timeout=VIEW_TIMEOUT)
         self.card_id = card_id
         self.filename = filename
@@ -431,6 +477,7 @@ class CardManageView(discord.ui.View):
         self.allow_repost = allow_repost
         self.allow_modify = allow_modify
         self.master_dir = master_dir  # 母带存储根目录，用于还原绝对路径
+        self.created_at = created_at  # 上传时间
     
     @discord.ui.button(label="删除", style=discord.ButtonStyle.danger, emoji="🗑️")
     async def delete_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -465,6 +512,15 @@ class CardManageView(discord.ui.View):
     
     @discord.ui.button(label="修改权限", style=discord.ButtonStyle.secondary, emoji="🔧")
     async def edit_permissions_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # 格式化时间显示（UTC+8）
+        def format_time(timestamp: str) -> str:
+            try:
+                dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                dt_beijing = dt + timedelta(hours=8)
+                return dt_beijing.strftime("%Y-%m-%d %H:%M")
+            except:
+                return "未知时间"
+        
         # 使用下拉菜单视图替代模态框
         view = PermissionEditView(
             self.card_id, 
@@ -475,10 +531,13 @@ class CardManageView(discord.ui.View):
             self.master_dir
         )
         
+        time_str = format_time(self.created_at) if self.created_at else "未知时间"
+        
         embed = discord.Embed(
             title="🔧 修改权限",
             description=(
-                f"**文件名:** {self.filename}\n\n"
+                f"**文件名:** {self.filename}\n"
+                f"**上传时间:** {time_str}\n\n"
                 f"**当前权限:**\n"
                 f"• 允许转载: {'✅ 是' if self.allow_repost else '❌ 否'}\n"
                 f"• 允许二改: {'✅ 是' if self.allow_modify else '❌ 否'}\n\n"
@@ -668,12 +727,27 @@ class SGPCog(commands.Cog):
         allow_repost="是否允许他人转载",
         allow_modify="是否允许他人二次创作"
     )
+    @app_commands.rename(
+        attachment="附件",
+        allow_repost="是否允许转载",
+        allow_modify="是否允许二改"
+    )
+    @app_commands.choices(
+        allow_repost=[
+            app_commands.Choice(name="是", value=1),
+            app_commands.Choice(name="否", value=0)
+        ],
+        allow_modify=[
+            app_commands.Choice(name="是", value=1),
+            app_commands.Choice(name="否", value=0)
+        ]
+    )
     async def upload_card(
         self,
         interaction: discord.Interaction,
         attachment: discord.Attachment,
-        allow_repost: bool = False,
-        allow_modify: bool = False
+        allow_repost: int = 0,
+        allow_modify: int = 0
     ):
         await interaction.response.defer(ephemeral=True)
         
@@ -717,8 +791,9 @@ class SGPCog(commands.Cog):
             storage_path = master_dir / str(guild_id) / str(channel_id)
             storage_path.mkdir(parents=True, exist_ok=True)
             
-            # 生成唯一文件名
-            stored_filename = f"{uuid.uuid4().hex}_{attachment.filename}"
+            # 生成安全的存储文件名（UUID + 扩展名），避免非ASCII字符问题
+            file_extension = os.path.splitext(attachment.filename)[1]  # 获取扩展名（如 .png）
+            stored_filename = f"{uuid.uuid4().hex}{file_extension}"  # 纯UUID文件名
             full_path = storage_path / stored_filename
             
             # 保存临时文件
@@ -728,11 +803,11 @@ class SGPCog(commands.Cog):
             # 并发调用 SGP Core 制作母带
             loop = asyncio.get_event_loop()
             
-            # 更新配置
+            # 更新配置（将int转为bool）
             config = self.config.copy()
             config['owner_uuid'] = interaction.user.id
-            config['allow_reprint'] = allow_repost
-            config['allow_derivative'] = allow_modify
+            config['allow_reprint'] = bool(allow_repost)
+            config['allow_derivative'] = bool(allow_modify)
             
             master_path = await loop.run_in_executor(
                 self.executor,
@@ -748,7 +823,7 @@ class SGPCog(commands.Cog):
             # 计算相对路径（存储到数据库）
             relative_path = f"{guild_id}/{channel_id}/{stored_filename}"
             
-            # 写入数据库 - 存储相对路径，而非绝对路径
+            # 写入数据库 - 存储相对路径，而非绝对路径（将int转为bool）
             card_id = add_card(
                 guild_id=guild_id,
                 channel_id=channel_id,
@@ -757,8 +832,8 @@ class SGPCog(commands.Cog):
                 filename=attachment.filename,
                 stored_filename=stored_filename,
                 file_path=relative_path,  # ← 存储相对路径
-                allow_repost=allow_repost,
-                allow_modify=allow_modify
+                allow_repost=bool(allow_repost),
+                allow_modify=bool(allow_modify)
             )
             
             # 清理临时文件
@@ -836,7 +911,7 @@ class SGPCog(commands.Cog):
             
             embed = discord.Embed(
                 title="📥 选择角色卡",
-                description=f"当前帖子共有 **{len(cards)}** 张角色卡可供下载。\n请从下拉菜单中选择：",
+                description=f"当前帖子共有 **{len(cards)}** 张角色卡可供下载。\n请点击按钮选择：",
                 color=EMBED_COLOR
             )
             
@@ -898,6 +973,7 @@ class SGPCog(commands.Cog):
     
     @app_commands.command(name="审查角色卡", description="检查图片的水印信息（溯源）")
     @app_commands.describe(attachment="要审查的图片")
+    @app_commands.rename(attachment="附件")
     async def audit_card(self, interaction: discord.Interaction, attachment: discord.Attachment):
         await interaction.response.defer(ephemeral=True)
         
@@ -1036,7 +1112,7 @@ class SGPCog(commands.Cog):
             inline=False
         )
         
-        embed.set_footer(text="ShadowGuard Protocol v5.0 - DWT+DCT+QIM 混合水印系统")
+        embed.set_footer(text="角色卡追溯系统 - ShadowGuard Protocol v5.0")
         
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
