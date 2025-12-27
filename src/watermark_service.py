@@ -189,12 +189,12 @@ def create_master_copy(file_path: str, config: Dict[str, Any]) -> str:
     return str(output_path)
 
 
-def generate_distribution(master_filename: str, user_uuid: int, config: Dict[str, Any]) -> str:
+def generate_distribution(master_path: str, user_uuid: int, config: Dict[str, Any]) -> str:
     """
     生成分发版本（用户通道）
     
     Args:
-        master_filename: 母带文件名（不含路径）
+        master_path: 母带文件完整路径（绝对路径）
         user_uuid: 用户 UID (25 位)
         config: 配置字典
     
@@ -204,9 +204,8 @@ def generate_distribution(master_filename: str, user_uuid: int, config: Dict[str
     Raises:
         ValueError: 母带不存在或水印读取失败
     """
-    # 构建母带完整路径
-    master_dir = Path(config['master_dir'])
-    master_path = master_dir / master_filename
+    # 直接使用传入的完整路径
+    master_path = Path(master_path)
     
     if not master_path.exists():
         raise ValueError(f"母带文件不存在: {master_path}")
@@ -261,6 +260,68 @@ def generate_distribution(master_filename: str, user_uuid: int, config: Dict[str
     
     print(f"[分发生成] ✅ 分发版本已保存: {output_path}")
     return str(output_path)
+
+
+def update_master_permissions(master_path: str, allow_reprint: bool, allow_derivative: bool, config: Dict[str, Any]) -> bool:
+    """
+    更新母带文件的权限水印
+    
+    Args:
+        master_path: 母带文件完整路径
+        allow_reprint: 是否允许转载
+        allow_derivative: 是否允许二次创作
+        config: 配置字典
+    
+    Returns:
+        是否更新成功
+    """
+    master_path = Path(master_path)
+    
+    if not master_path.exists():
+        raise ValueError(f"母带文件不存在: {master_path}")
+    
+    print(f"\n[权限更新] 正在更新母带权限: {master_path}")
+    
+    # 读取母带
+    img = _read_image_cv2(str(master_path))
+    
+    # 提取现有水印
+    payload, confidence = extract_watermark(
+        img,
+        config['watermark_key'],
+        config['qim_step']
+    )
+    
+    if payload is None:
+        raise ValueError(f"无法从母带中提取水印 (置信度: {confidence*100:.1f}%)")
+    
+    if not payload.is_master():
+        raise ValueError(f"该文件不是母带 (Current UID: {payload.current_uid})")
+    
+    print(f"[权限更新] 当前权限 - 转载: {payload.allow_reprint}, 二改: {payload.allow_derivative}")
+    print(f"[权限更新] 新权限 - 转载: {allow_reprint}, 二改: {allow_derivative}")
+    
+    # 创建新的 Payload（保持 UID，更新权限）
+    new_payload = WatermarkPayload(
+        original_uid=payload.original_uid,  # 保持不变
+        current_uid=NULL_UID,                # 保持母带状态
+        allow_reprint=allow_reprint,         # 更新
+        allow_derivative=allow_derivative    # 更新
+    )
+    
+    # 重新嵌入水印
+    img_updated = embed_watermark(
+        img,
+        new_payload,
+        config['watermark_key'],
+        config['qim_step']
+    )
+    
+    # 覆盖保存（保留元数据）
+    _save_image_with_metadata(img_updated, str(master_path), str(master_path))
+    
+    print(f"[权限更新] ✅ 母带权限已更新")
+    return True
 
 
 def check_watermark(file_path: str, config: Dict[str, Any]) -> Dict[str, Any]:

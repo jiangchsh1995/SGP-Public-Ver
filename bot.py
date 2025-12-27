@@ -16,7 +16,8 @@ from src.watermark_service import (
     load_config,
     create_master_copy,
     generate_distribution,
-    check_watermark
+    check_watermark,
+    update_master_permissions
 )
 
 # ==================== 配置常量 ====================
@@ -364,8 +365,29 @@ class CardManageView(discord.ui.View):
     
     @discord.ui.button(label="修改权限", style=discord.ButtonStyle.secondary, emoji="🔧")
     async def edit_permissions_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        modal = PermissionModal(self.card_id, self.filename, self.allow_repost, self.allow_modify)
-        await interaction.response.send_modal(modal)
+        # 使用下拉菜单视图替代模态框
+        view = PermissionEditView(
+            self.card_id, 
+            self.filename, 
+            self.file_path,
+            self.allow_repost, 
+            self.allow_modify,
+            self.master_dir
+        )
+        
+        embed = discord.Embed(
+            title="🔧 修改权限",
+            description=(
+                f"**文件名:** {self.filename}\n\n"
+                f"**当前权限:**\n"
+                f"• 允许转载: {'✅ 是' if self.allow_repost else '❌ 否'}\n"
+                f"• 允许二改: {'✅ 是' if self.allow_modify else '❌ 否'}\n\n"
+                f"请使用下拉菜单选择新的权限设置："
+            ),
+            color=EMBED_COLOR
+        )
+        
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
     
     @discord.ui.button(label="取消", style=discord.ButtonStyle.secondary, emoji="❌")
     async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -377,69 +399,153 @@ class CardManageView(discord.ui.View):
         await interaction.response.edit_message(embed=embed, view=None)
 
 
-class PermissionModal(discord.ui.Modal, title="修改权限"):
-    """权限修改模态框"""
+class PermissionEditView(discord.ui.View):
+    """权限编辑视图（使用下拉菜单）"""
     
-    def __init__(self, card_id: int, filename: str, current_repost: bool, current_modify: bool):
-        super().__init__()
+    def __init__(self, card_id: int, filename: str, file_path: str,
+                 current_repost: bool, current_modify: bool, master_dir: Path):
+        super().__init__(timeout=VIEW_TIMEOUT)
         self.card_id = card_id
         self.filename = filename
+        self.file_path = file_path
+        self.current_repost = current_repost
+        self.current_modify = current_modify
+        self.master_dir = master_dir
         
-        self.repost_input = discord.ui.TextInput(
-            label="允许转载 (true/false)",
-            placeholder="true 或 false",
-            default=str(current_repost).lower(),
-            max_length=5
+        # 添加转载权限选择器
+        self.repost_select = discord.ui.Select(
+            placeholder="选择转载权限",
+            options=[
+                discord.SelectOption(
+                    label="✅ 允许转载",
+                    value="true",
+                    description="允许他人转载此卡片",
+                    default=current_repost
+                ),
+                discord.SelectOption(
+                    label="❌ 禁止转载",
+                    value="false",
+                    description="禁止他人转载此卡片",
+                    default=not current_repost
+                )
+            ],
+            custom_id="repost_select"
         )
         
-        self.modify_input = discord.ui.TextInput(
-            label="允许二改 (true/false)",
-            placeholder="true 或 false",
-            default=str(current_modify).lower(),
-            max_length=5
+        # 添加二改权限选择器
+        self.modify_select = discord.ui.Select(
+            placeholder="选择二改权限",
+            options=[
+                discord.SelectOption(
+                    label="✅ 允许二改",
+                    value="true",
+                    description="允许他人二次创作",
+                    default=current_modify
+                ),
+                discord.SelectOption(
+                    label="❌ 禁止二改",
+                    value="false",
+                    description="禁止他人二次创作",
+                    default=not current_modify
+                )
+            ],
+            custom_id="modify_select"
         )
         
-        self.add_item(self.repost_input)
-        self.add_item(self.modify_input)
+        self.add_item(self.repost_select)
+        self.add_item(self.modify_select)
+        
+        # 用于存储选择的值
+        self.new_repost = current_repost
+        self.new_modify = current_modify
+        
+        # 设置回调
+        self.repost_select.callback = self.repost_callback
+        self.modify_select.callback = self.modify_callback
     
-    async def on_submit(self, interaction: discord.Interaction):
+    async def repost_callback(self, interaction: discord.Interaction):
+        self.new_repost = self.repost_select.values[0] == "true"
+        await interaction.response.defer()
+    
+    async def modify_callback(self, interaction: discord.Interaction):
+        self.new_modify = self.modify_select.values[0] == "true"
+        await interaction.response.defer()
+    
+    @discord.ui.button(label="确认修改", style=discord.ButtonStyle.primary, emoji="✅")
+    async def confirm_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        
         try:
-            allow_repost = self.repost_input.value.lower() in ('true', '1', 'yes', 'y')
-            allow_modify = self.modify_input.value.lower() in ('true', '1', 'yes', 'y')
-            
-            success = update_card_permissions(
+            # 更新数据库权限
+            db_success = update_card_permissions(
                 self.card_id,
                 interaction.user.id,
-                allow_repost,
-                allow_modify
+                self.new_repost,
+                self.new_modify
             )
             
-            if success:
-                embed = discord.Embed(
-                    title="✅ 权限已更新",
-                    description=(
-                        f"**文件名:** {self.filename}\n"
-                        f"**新权限:**\n"
-                        f"• 允许转载: {'✅ 是' if allow_repost else '❌ 否'}\n"
-                        f"• 允许二改: {'✅ 是' if allow_modify else '❌ 否'}"
-                    ),
-                    color=EMBED_COLOR
+            if not db_success:
+                await interaction.followup.send(
+                    "❌ 更新失败：您没有权限修改此卡片",
+                    ephemeral=True
                 )
-            else:
-                embed = discord.Embed(
-                    title="❌ 更新失败",
-                    description="您没有权限修改此卡片",
-                    color=0xFF0000
-                )
+                return
             
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            # 更新母带文件水印
+            try:
+                real_file_path = self.master_dir / self.file_path
+                
+                loop = asyncio.get_event_loop()
+                config = await loop.run_in_executor(None, load_config)
+                
+                await loop.run_in_executor(
+                    None,
+                    update_master_permissions,
+                    str(real_file_path),
+                    self.new_repost,
+                    self.new_modify,
+                    config
+                )
+                
+                print(f"[权限更新] ✅ 卡片 {self.card_id} 权限已更新（含母带文件）")
+                
+            except Exception as e:
+                print(f"[警告] 母带文件权限更新失败: {traceback.format_exc()}")
+                await interaction.followup.send(
+                    "⚠️ 数据库权限已更新，但母带文件更新失败。请联系管理员。",
+                    ephemeral=True
+                )
+                return
+            
+            embed = discord.Embed(
+                title="✅ 权限已更新",
+                description=(
+                    f"**文件名:** {self.filename}\n\n"
+                    f"**新权限:**\n"
+                    f"• 允许转载: {'✅ 是' if self.new_repost else '❌ 否'}\n"
+                    f"• 允许二改: {'✅ 是' if self.new_modify else '❌ 否'}\n\n"
+                    f"数据库和母带文件均已更新。"
+                ),
+                color=EMBED_COLOR
+            )
+            
+            await interaction.followup.send(embed=embed, ephemeral=True)
             
         except Exception as e:
             print(f"[错误] 权限更新失败: {traceback.format_exc()}")
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ 更新失败：权限设置出现错误",
                 ephemeral=True
             )
+    
+    @discord.ui.button(label="取消", style=discord.ButtonStyle.secondary, emoji="❌")
+    async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        embed = discord.Embed(
+            title="已取消",
+            description="权限修改已取消",
+            color=EMBED_COLOR
+        )
+        await interaction.response.edit_message(embed=embed, view=None)
 
 
 # ==================== Bot Commands Cog ====================
@@ -857,7 +963,8 @@ class SGPBot(commands.Bot):
     async def setup_hook(self):
         """Bot 启动时的钩子函数"""
         await self.add_cog(SGPCog(self))
-        print("[Bot] ✅ 命令已注册")
+        await self.tree.sync()
+        print("[Bot] ✅ 命令已请求全球同步（请等待生效）")
     
     async def on_ready(self):
         """Bot 就绪事件处理"""
