@@ -1,4 +1,4 @@
-import discord
+﻿import discord
 from discord import app_commands
 from discord.ext import commands
 import asyncio
@@ -354,6 +354,19 @@ class PaginatedCardView(discord.ui.View):
             # 发送文件
             file = discord.File(dist_path, filename=filename)
             
+            # 根据作者权限设置动态生成使用提示
+            usage_tips = []
+            if allow_repost and allow_modify:
+                usage_tips.append("• 作者同意转载和二次创作")
+            elif allow_repost:
+                usage_tips.append("• 作者同意转载")
+            elif allow_modify:
+                usage_tips.append("• 作者同意二次创作")
+            else:
+                usage_tips.append("• 仅供个人使用，请勿随意传播")
+            
+            usage_text = "\n".join(usage_tips)
+            
             embed = discord.Embed(
                 title="📥 角色卡已生成",
                 description=(
@@ -361,8 +374,8 @@ class PaginatedCardView(discord.ui.View):
                     f"**上传者:** <@{uploader_id}>\n\n"
                     f"⚠️ **重要提示:**\n"
                     f"• 此文件已嵌入您的专属追溯标识\n"
-                    f"• 仅供个人使用，请勿随意传播\n"
-                    f"• 若发现泄露，系统可追溯到您的账号"
+                    f"{usage_text}\n"
+                    f"• 若出现在第三方商业网站，系统可追溯到您的 DC 账号"
                 ),
                 color=EMBED_COLOR
             )
@@ -650,7 +663,7 @@ class PermissionEditView(discord.ui.View):
                 )
                 return
             
-            # 更新母带文件水印
+            # 更新母带文件追溯信息
             try:
                 real_file_path = self.master_dir / self.file_path
                 
@@ -710,7 +723,7 @@ class PermissionEditView(discord.ui.View):
 # ==================== Bot Commands Cog ====================
 
 class SGPCog(commands.Cog):
-    """SGP 水印系统命令集"""
+    """SGP 角色卡追溯系统命令集"""
     
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -721,7 +734,7 @@ class SGPCog(commands.Cog):
         self.master_dir = Path(self.config.get('master_dir', 'storage/masters'))
         self.master_dir.mkdir(parents=True, exist_ok=True)
     
-    @app_commands.command(name="上传角色卡", description="上传角色卡并生成母带水印")
+    @app_commands.command(name="上传角色卡", description="上传角色卡并生成追溯母带")
     @app_commands.describe(
         attachment="PNG 格式的角色卡图片",
         allow_repost="是否允许他人转载",
@@ -849,7 +862,7 @@ class SGPCog(commands.Cog):
                     f"• 允许转载: {'✅ 是' if allow_repost else '❌ 否'}\n"
                     f"• 允许二改: {'✅ 是' if allow_modify else '❌ 否'}\n\n"
                     f"母带已生成并保存到安全存储区。\n"
-                    f"其他用户可通过 `/下载角色卡` 获取带水印的副本。"
+                    f"其他用户可通过 `/下载角色卡` 获取带追溯标识的副本。"
                 ),
                 color=EMBED_COLOR
             )
@@ -878,7 +891,7 @@ class SGPCog(commands.Cog):
             except:
                 pass
     
-    @app_commands.command(name="下载角色卡", description="下载当前帖子的角色卡（自动添加水印）")
+    @app_commands.command(name="下载角色卡", description="下载当前帖子的角色卡（自动添加追溯标识）")
     async def download_card(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         
@@ -971,7 +984,7 @@ class SGPCog(commands.Cog):
                 ephemeral=True
             )
     
-    @app_commands.command(name="审查角色卡", description="检查图片的水印信息（溯源）")
+    @app_commands.command(name="审查角色卡", description="检查图片的溯源信息")
     @app_commands.describe(attachment="要审查的图片")
     @app_commands.rename(attachment="附件")
     async def audit_card(self, interaction: discord.Interaction, attachment: discord.Attachment):
@@ -1158,7 +1171,7 @@ def main():
     """主函数"""
     print("=" * 60)
     print("ShadowGuard Protocol (SGP) - Discord Bot")
-    print("DWT+DCT+QIM 混合水印系统 v5.0")
+    print("DWT+DCT+QIM 混合追溯系统 v5.0")
     print("=" * 60)
     
     # 初始化数据库
