@@ -1,0 +1,35 @@
+# Python 编译文件
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+venv/
+env/
+ENV/
+
+# 敏感配置文件
+config.ini
+*.key
+
+# SGP 运行目录
+storage/
+input_images/*
+!input_images/.gitkeep
+output_reports/*
+!output_reports/.gitkeep
+
+# IDE 设置
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 操作系统
+.DS_Store
+Thumbs.db
+
+# 测试文件
+test_*.png
+test_*.jpg
