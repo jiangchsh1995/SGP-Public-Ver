@@ -7,6 +7,16 @@
 
 ---
 
+# 🛡️ SGP Watermark Bot - Security Audit Repository
+
+> ⚠️ **注意**：本仓库包含 **SGP 1.0 核心算法** 的未混淆源代码。
+> 仅授权社区管理组/技术人员进行安全审计。请勿将代码泄露给未授权的第三方。
+
+## 📂 审计指南
+管理员请直接查看 [审计与部署文档](AUDIT_README.md) 获取部署与核查指引。
+
+---
+
 ## 📖 概述
 
 SGP (ShadowGuard Protocol) 是基于 **DWT-DCT-QIM 混合架构**的高鲁棒性隐形水印协议，专为抵抗 JPEG 压缩和社交媒体传播（微信/Discord）而设计。具备母带/分发分离、96位 ID 支持和智能 DRM 鉴权功能。
